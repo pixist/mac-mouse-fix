@@ -202,6 +202,11 @@ class GeneralTabController: NSViewController {
                             
                             Toasts.showSimpleToast(name: "k-is-disabled-toast")
                         }
+                        else if error.domain == "MFHelperServicesErrorDomain" {
+                            /// Code signing or other helper services error (expected during development builds without signing)
+                            DDLogInfo("Helper enable failed with error: \(error.localizedDescription)")
+                            /// Don't crash on code signing errors during development
+                        }
                         else { assert(false) }
                     }
                 })

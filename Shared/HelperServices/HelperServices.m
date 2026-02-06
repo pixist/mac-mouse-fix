@@ -62,6 +62,7 @@
 #import "SharedUtility.h"
 #import "MFMessagePort.h"
 #import <ServiceManagement/ServiceManagement.h>
+#import <Security/Security.h>
 #import <sys/sysctl.h>
 #import <sys/types.h>
 #import "MFMessagePort.h"
@@ -154,7 +155,23 @@
     ///                 Update: [Sep 2025] Apple did fix things in macOS 15.0 Sequoia! We're also unregistering strange helpers in some cases when they message us over MFMessagePort. And before we enable here, we also unregister the helper – Should already be pretty robust even without strange helper detection here.
     ///                     Also see notes elsewhere about `is-strange-helper-alert`. [Sep 2025]
     
+    /// Check if app is properly code signed
+    /// For development builds without signing, we need to use the old plist-based method
+    BOOL useServiceManagement = NO;
     if (@available(macOS 13.0, *)) {
+        SecCodeRef codeRef = NULL;
+        OSStatus status = SecCodeCopySelf(kSecCSDefaultFlags, &codeRef);
+        if (status == errSecSuccess && codeRef != NULL) {
+            status = SecCodeCheckValidity(codeRef, kSecCSBasicValidateOnly, NULL);
+            CFRelease(codeRef);
+            useServiceManagement = (status == errSecSuccess);
+        }
+        if (!useServiceManagement) {
+            DDLogInfo(@"App is not properly signed (code: %d). Using legacy plist-based helper registration for development.", (int)status);
+        }
+    }
+    
+    if (useServiceManagement) {
         
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
                 
@@ -203,9 +220,14 @@
             /// - We could only do this only if strangeHelperIsRegisteredWithLaunchd, but users have been having some weirdd issues after upgrading to the app version and I don't know why. I feel like this might make things slightly more robust.
             removePrefpaneLaunchdPlist();
             
-            /// Unregister strange helper
-            if ([self strangeHelperIsRegisteredWithLaunchdIdentifier: kMFLaunchdHelperIdentifier]) {
+            /// Unregister strange helper (skip on macOS 13.0+ as detection doesn't work there)
+            if (@available(macOS 13.0, *)) {
+                /// On macOS 13.0+, just remove the service unconditionally to be safe
                 removeServiceWithIdentifier(kMFLaunchdHelperIdentifier);
+            } else {
+                if ([self strangeHelperIsRegisteredWithLaunchdIdentifier: kMFLaunchdHelperIdentifier]) {
+                    removeServiceWithIdentifier(kMFLaunchdHelperIdentifier);
+                }
             }
             
             if (enable) {
@@ -371,9 +393,14 @@ static BOOL helperIsActive_PList(void) {
     /// Check exit status. Not sure if useful
     BOOL exitStatusIsZero = [launchctlOutput rangeOfString: @"\"LastExitStatus\" = 0;"].location != NSNotFound;
     
-    if ([HelperServices strangeHelperIsRegisteredWithLaunchdIdentifier:kMFLaunchdHelperIdentifier]) {
-        DDLogInfo(@"Found helper running somewhere else.");
-        return NO;
+    /// Check for strange helper (skip on macOS 13.0+ as detection doesn't work there)
+    if (@available(macOS 13.0, *)) {
+        /// On macOS 13.0+, skip this check as it doesn't work
+    } else {
+        if ([HelperServices strangeHelperIsRegisteredWithLaunchdIdentifier:kMFLaunchdHelperIdentifier]) {
+            DDLogInfo(@"Found helper running somewhere else.");
+            return NO;
+        }
     }
     
     if (labelFound && exitStatusIsZero) { /// Why check for exit status here?
@@ -398,6 +425,37 @@ static BOOL helperIsActive_PList(void) {
         if (runningHelper()) {
             DDLogWarn(@"Calling enableHelper_SM from Helper under Ventura or later. This is does not work.");
             return [NSError errorWithDomain:MFHelperServicesErrorDomain code:kMFHelperServicesErrorEnableFromHelper userInfo:nil];
+        }
+        
+        /// Guard code signing
+        ///     ServiceManagement APIs require proper code signing. Without it, they crash when trying to access bundle paths.
+        ///     This commonly happens during development when building without signing.
+        ///     We need to verify that the code signature is actually valid, not just that the code exists.
+        SecCodeRef codeRef = NULL;
+        OSStatus status = SecCodeCopySelf(kSecCSDefaultFlags, &codeRef);
+        if (status != errSecSuccess || codeRef == NULL) {
+            DDLogWarn(@"Failed to get code reference. ServiceManagement APIs will not work. Error code: %d", (int)status);
+            if (codeRef) CFRelease(codeRef);
+            return [NSError errorWithDomain:MFHelperServicesErrorDomain code:kMFHelperServicesErrorEnableFromHelper userInfo:@{NSLocalizedDescriptionKey: @"App is not properly code signed. This is expected during development builds without signing."}];
+        }
+        
+        /// Verify the signature is valid
+        SecRequirementRef requirement = NULL;
+        status = SecRequirementCreateWithString(CFSTR("anchor apple generic"), kSecCSDefaultFlags, &requirement);
+        if (status == errSecSuccess && requirement != NULL) {
+            /// Check if code meets basic signing requirements
+            status = SecCodeCheckValidity(codeRef, kSecCSBasicValidateOnly, requirement);
+            CFRelease(requirement);
+        } else {
+            /// If we can't create requirement, just do basic validity check
+            status = SecCodeCheckValidity(codeRef, kSecCSBasicValidateOnly, NULL);
+        }
+        
+        CFRelease(codeRef);
+        
+        if (status != errSecSuccess) {
+            DDLogWarn(@"App signature validation failed. ServiceManagement APIs will not work. Error code: %d. This is expected during development builds without signing.", (int)status);
+            return [NSError errorWithDomain:MFHelperServicesErrorDomain code:kMFHelperServicesErrorEnableFromHelper userInfo:@{NSLocalizedDescriptionKey: @"App is not properly code signed. This is expected during development builds without signing."}];
         }
         
         /// Create error

@@ -333,7 +333,12 @@ int getMajorVersion(NSString *version) {
 }
 
 - (BOOL)updaterShouldPromptForPermissionToCheckForUpdates:(SUUpdater *)updater {
-    /// We don't use Sparkles automatic scheduled updates anyways. Instead we simply check every time the app is started. So what the user chooses in this prompt doesn't make difference anyways. So were disabling the prompts.
+    /// Update checks disabled - all web connectivity removed
+    return NO;
+}
+
+- (BOOL)updaterMayCheckForUpdates:(SUUpdater *)updater {
+    /// Update checks disabled - all web connectivity removed
     return NO;
 }
 

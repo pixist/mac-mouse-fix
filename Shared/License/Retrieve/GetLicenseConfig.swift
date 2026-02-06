@@ -20,11 +20,8 @@
     
     @objc static func get(_callingFunc: String = #function) async -> MFLicenseConfig { assert(Thread.isMainThread)
     
-        /// Remember:
-        ///     For offline validation to work - only call this function on code-paths where it's absolutely necessary.
-        ///     (More below in our explanation of the *offline validation strategy*)
-        
-        let result = (await licenseConfigFromServer()) ?? licenseConfigCached() ?? licenseConfigFallback()
+        /// Network connectivity removed - always use local config only
+        let result = licenseConfigCached() ?? licenseConfigFallback()
         
         DDLogInfo("GetLicenseConfig.get(): \(result)\ncaller: \(_callingFunc)")
         

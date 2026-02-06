@@ -343,9 +343,9 @@ static NSDictionary *sideButtonActions;
     /// Write changes to we made to config through setConfig() to file. Also notifies helper app, which is probably unnecessary.
     commitConfig();
     
-    /// Check for udates
+    /// Check for udates - DISABLED: All web connectivity removed
     
-    if (checkForUpdates) {
+    if (false && checkForUpdates) {
         
         [SparkleUpdaterController enablePrereleaseChannel:checkForPrereleases];
         
